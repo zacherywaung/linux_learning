@@ -1,0 +1,17 @@
+
+# compiling file
+
+*.o
+*.out
+*.exe
+
+# excutable file
+
+test
+main
+mycode
+
+
+#macOS system file
+
+.DS_Store
