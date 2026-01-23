@@ -1,5 +1,5 @@
 myprocess:myprocess.c
-	gcc -o $@ $<
+	gcc -o $@ $^
 .PHONY:clean
 clean:
 	rm -rf myprocess
