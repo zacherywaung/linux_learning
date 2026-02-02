@@ -3,14 +3,18 @@
 #include<unistd.h>
 #include<cstring>
 #include<sys/types.h>
+#include<sys/stat.h>
 #include<sys/wait.h>
 #include<string>
+#include<fcntl.h>
 
 #define PROMPTFORMAT "[%s@%s %s]# "
 #define PROMPTSIZE 1024
 #define COMMANDSIZE 1024
 #define MAXARGC 100
 #define MAX_ENVS 100
+#define BASICSIZE 1024
+#define BASICSIZE2 100
 
 // argument vector
 char* g_argv[MAXARGC];
@@ -23,8 +27,16 @@ int g_envs = 0;
 // last exit code
 int last_code = 0;
 
-char buff[1024];
-char oldpwdenv[1024];
+char buff[BASICSIZE];
+char oldpwdenv[BASICSIZE];
+
+// redir
+#define NODIR 0
+#define INPUT_REDIR 1
+#define OUTPUT_REDIR 2
+#define APPEND_REDIR 3
+int redir = NODIR;
+std::string filename;
 
 char* getUser(){return getenv("USER");}	
 
@@ -150,9 +162,9 @@ void excuteCd()
 void excuteEcho()
 {
 	int ret = 1;
-	if(g_argc == 2)
+	for(int i = 1; i < g_argc; i++)
 	{
-		std::string which = g_argv[1];
+		std::string which = g_argv[i];
 		if(which == "$?")
 		{
 			std::cout << last_code << std::endl;
@@ -171,10 +183,15 @@ void excuteEcho()
 		}
 		else
 		{
-			std::cout << which << std::endl;
+			std::cout << which;
 			ret = 0;
 		}
+		if(i < g_argc - 1)
+		{
+			std::cout << " ";
+		}
 	}
+	std::cout << std::endl;
 	if(ret == 0)
 	{
 		last_code = 0;
@@ -189,18 +206,55 @@ void excuteEcho()
 bool checkAndExcuteBuiltIn()
 {
 	std::string which = g_argv[0];
+	int fd_backup = -1;
+	if(redir == INPUT_REDIR)
+	{
+		fd_backup = dup(0);
+		int fd = open(filename.c_str(), O_RDONLY);
+		dup2(fd, 0);
+		close(fd);
+	}
+	else if(redir == OUTPUT_REDIR)
+	{
+		fd_backup = dup(1);
+		int fd = open(filename.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0664);
+		dup2(fd, 1);
+		close(fd);
+	}
+	else if(redir == APPEND_REDIR)
+	{
+		fd_backup = dup(1);
+		int fd = open(filename.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0664);
+		dup2(fd, 1);
+		close(fd);
+	}
+
+	bool ret = false;
 	if(which == "cd")
 	{
 		excuteCd();
-		return true;
+		ret = true;
 	}
 	if(which == "echo")
 	{
 		excuteEcho();
-		return true;
+		ret = true;
 	}
 
-	return false;
+	if(fd_backup != -1)
+	{
+		if(redir == INPUT_REDIR)
+		{
+			dup2(fd_backup, 0);
+		}
+		else
+		{
+			dup2(fd_backup, 1);
+		}
+		close(fd_backup);
+	}
+
+	return ret;
 }
 
 
@@ -209,6 +263,25 @@ int excuteCommand()
 	pid_t id = fork();
 	if(id == 0)
 	{
+		if(redir == INPUT_REDIR)
+		{
+			int fd = open(filename.c_str(), O_RDONLY);
+			dup2(fd, 0);
+			close(fd);
+		}
+		else if(redir == OUTPUT_REDIR)
+		{
+			int fd = open(filename.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0666);
+			dup2(fd, 1);
+			close(fd);
+		}
+		else if(redir == APPEND_REDIR)
+		{
+
+			int fd = open(filename.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0666);
+			dup2(fd, 1);
+			close(fd);
+		}
 		execvp(g_argv[0], g_argv);
 		exit(1);
 	}
@@ -238,6 +311,49 @@ void InitEnv()
 	g_env[g_envs] = NULL;
 }
 
+void trimSpace(char* cmd, int& end)
+{
+	while(isspace(cmd[end]))
+	{
+		end++;
+	}
+}
+
+void checkRedir(char* cmd)
+{
+	filename.clear();
+	redir = NODIR;
+	int start = 0;
+	int end = strlen(cmd) - 1;
+	while(end > start)
+	{
+		if(cmd[end] == '<')
+		{
+			redir = INPUT_REDIR;
+			cmd[end++] = '\0';
+			trimSpace(cmd, end);
+			filename = cmd + end;
+			break;
+		}
+		else if(cmd[end] == '>')
+		{
+			if(cmd[end - 1] == '>')
+			{
+				redir = APPEND_REDIR;
+				cmd[end - 1] = '\0';
+			}
+			else{
+				redir = OUTPUT_REDIR;
+			}
+		        cmd[end++] = '\0';
+		        trimSpace(cmd, end);
+		        filename = cmd + end;
+			break;
+		}
+		end--;
+	}	
+}
+
 int main()
 {
 	InitEnv();
@@ -251,10 +367,13 @@ int main()
 		if(!getCommand(command, sizeof(command)))
 			continue;
 		
+		// check redir
+		checkRedir(command);
+
 		// analyze command
 		analyzeCommand(command);
 		//testAnalyzeCommand();
-		
+			
 		// excute builtin command
 		if(checkAndExcuteBuiltIn())
 		       continue;	
